@@ -1,4 +1,5 @@
-﻿using DocumentFormat.OpenXml.Packaging;
+﻿using DocumentFormat.OpenXml;
+using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Spreadsheet;
 using System;
 using System.Collections.Generic;
@@ -17,14 +18,53 @@ namespace xlsx_to_json
             IEnumerable<WorksheetPart> worksheetParts = workbookPart.WorksheetParts;
             WorksheetPart worksheetPart = worksheetParts.First();
             SheetData sheetData = (SheetData)worksheetPart.RootElement.ChildElements.Single(w => w is SheetData);
-
-
-
             SharedStringTablePart? sharedStringTablePart = workbookPart.SharedStringTablePart;
 
-            for (int i = 5; i < sheetData.ChildElements.Count; i++)
+
+            IDictionary<string, string> sharedStringIndexesForValuesWanted = new Dictionary<string, string>();
+
+            OpenXmlElement keypadSnCell = sharedStringTablePart.SharedStringTable.ChildElements.Single(ce => ce.InnerText.Equals("Keypad SN"));
+            string indexOfKeypadSnString = sharedStringTablePart.SharedStringTable.ChildElements.ToList().IndexOf(keypadSnCell).ToString();
+
+            sharedStringIndexesForValuesWanted[indexOfKeypadSnString] = "Keypad SN";
+
+            int keypadSnRowNumber = 0;
+
+            Dictionary<string, string> cellReferencesForValuesWanted = new();
+
+            foreach (Row row in sheetData.ChildElements)
+            {
+                foreach (Cell cell in row.ChildElements)
+                {
+                    if (sharedStringIndexesForValuesWanted.ContainsKey(cell.InnerText))
+                    {
+                        keypadSnRowNumber = int.Parse(row.GetAttribute("r", string.Empty).Value);
+                        // the below will have the full cell reference
+                        cellReferencesForValuesWanted[sharedStringIndexesForValuesWanted[cell.InnerText]] = cell.GetAttribute("r", string.Empty).Value;
+                        goto KeypadSnRowNumberFound;
+                    }
+                }
+            }
+
+        KeypadSnRowNumberFound:
+
+            bool keepCheckingForVotingSectionStart = true;
+
+            // Need to find where the "Keypad SN" cell is. That will define the row to start.
+            for (int i = 0; i < sheetData.ChildElements.Count; i++)
             {
                 Row row = (Row)sheetData.ChildElements[i];
+
+                string? rowNumberAttribute = row.GetAttribute("r", string.Empty).Value;
+                if (keepCheckingForVotingSectionStart && !rowNumberAttribute.Equals(keypadSnRowNumber.ToString()))
+                {
+                    continue;
+                }
+                else
+                {
+                    keepCheckingForVotingSectionStart = false;
+                }
+
                 string rowNumber = row.GetAttribute("r", string.Empty).Value;
                 string[] spanStartAndEnd = row.GetAttribute("spans", string.Empty).Value.Split(":");
                 int columnStart = int.Parse(spanStartAndEnd[0]) - 1;
@@ -37,7 +77,7 @@ namespace xlsx_to_json
                 }
                 for (int j = 1; j < columnEnd; j++)
                 {
-                    string currentCell = ColumnName(j) + rowNumber;
+                    string currentCell = ColumnName(j) + rowNumberAttribute;
                     if (i == 5)
                     {
                         SharedStringItem sharedStringItem = (SharedStringItem)sharedStringTablePart.SharedStringTable.ChildElements[int.Parse(row.ChildElements[j].InnerText)];

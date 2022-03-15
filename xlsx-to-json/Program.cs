@@ -3,6 +3,7 @@ using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Spreadsheet;
 using xlsx_to_json;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 Console.WriteLine("Hello, World!");
 
@@ -13,6 +14,13 @@ WccVotingSpreadsheet wccVotingSpreadsheet = new WccVotingSpreadsheet();
 
 CouncilVotes councilVotes = wccVotingSpreadsheet.TransformExcel(spreadsheetDocument.WorkbookPart);
 
-string outputJson = JsonSerializer.Serialize(councilVotes);
+JsonSerializerOptions options = new JsonSerializerOptions
+{
+    Converters =
+    {
+        new JsonStringEnumConverter(JsonNamingPolicy.CamelCase)
+    }
+};
+string outputJson = JsonSerializer.Serialize(councilVotes, options);
 
-File.WriteAllText($"wcc-votes-{DateTime.UtcNow.Millisecond}", outputJson);
+File.WriteAllText($"wcc-votes-{DateTime.UtcNow.Ticks}.json", outputJson);
