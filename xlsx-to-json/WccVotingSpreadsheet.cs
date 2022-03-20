@@ -20,35 +20,30 @@ namespace xlsx_to_json
             SheetData sheetData = (SheetData)worksheetPart.RootElement.ChildElements.Single(w => w is SheetData);
             SharedStringTablePart? sharedStringTablePart = workbookPart.SharedStringTablePart;
 
+            // Why not just make an in memory table with all the properties you want? Then just use objects and LINQ to chop it up as needed :/
 
             IDictionary<string, string> sharedStringIndexesForValuesWanted = new Dictionary<string, string>();
 
-            OpenXmlElement keypadSnCell = sharedStringTablePart.SharedStringTable.ChildElements.Single(ce => ce.InnerText.Equals("Keypad SN"));
-            string indexOfKeypadSnString = sharedStringTablePart.SharedStringTable.ChildElements.ToList().IndexOf(keypadSnCell).ToString();
+            GetSharedStringIndex(sharedStringTablePart, sharedStringIndexesForValuesWanted, "Keypad SN");
+            GetSharedStringIndex(sharedStringTablePart, sharedStringIndexesForValuesWanted, "First Name");
+            GetSharedStringIndex(sharedStringTablePart, sharedStringIndexesForValuesWanted, "Last Name");
 
-            sharedStringIndexesForValuesWanted[indexOfKeypadSnString] = "Keypad SN";
-
-            int keypadSnRowNumber = 0;
 
             Dictionary<string, string> cellReferencesForValuesWanted = new();
 
-            foreach (Row row in sheetData.ChildElements)
+            foreach (Cell? cell in sheetData.ChildElements.SelectMany(row => row.ChildElements.Where(cell => sharedStringIndexesForValuesWanted.ContainsKey(cell.InnerText))))
             {
-                foreach (Cell cell in row.ChildElements)
+                if (cell == null)
                 {
-                    if (sharedStringIndexesForValuesWanted.ContainsKey(cell.InnerText))
-                    {
-                        keypadSnRowNumber = int.Parse(row.GetAttribute("r", string.Empty).Value);
-                        // the below will have the full cell reference
-                        cellReferencesForValuesWanted[sharedStringIndexesForValuesWanted[cell.InnerText]] = cell.GetAttribute("r", string.Empty).Value;
-                        goto KeypadSnRowNumberFound;
-                    }
+                    continue;
                 }
+                // the below will have the full cell reference
+                cellReferencesForValuesWanted[sharedStringIndexesForValuesWanted[cell.InnerText]] = cell.CellReference.Value;
             }
 
-        KeypadSnRowNumberFound:
-
             bool keepCheckingForVotingSectionStart = true;
+
+            Row startingRow = sheetData.ChildElements.SelectMany(row => row.ChildElements.Where(cell => ((Cell)cell).DataType?.Value == CellValues.SharedString && ((Cell)cell).InnerText == "5")).Single().Parent as Row;
 
             // Need to find where the "Keypad SN" cell is. That will define the row to start.
             for (int i = 0; i < sheetData.ChildElements.Count; i++)
@@ -56,7 +51,7 @@ namespace xlsx_to_json
                 Row row = (Row)sheetData.ChildElements[i];
 
                 string? rowNumberAttribute = row.GetAttribute("r", string.Empty).Value;
-                if (keepCheckingForVotingSectionStart && !rowNumberAttribute.Equals(keypadSnRowNumber.ToString()))
+                if (keepCheckingForVotingSectionStart && row.RowIndex != startingRow.RowIndex)
                 {
                     continue;
                 }
@@ -65,15 +60,14 @@ namespace xlsx_to_json
                     keepCheckingForVotingSectionStart = false;
                 }
 
-                string rowNumber = row.GetAttribute("r", string.Empty).Value;
-                string[] spanStartAndEnd = row.GetAttribute("spans", string.Empty).Value.Split(":");
+                string[] spanStartAndEnd = row.Spans.Items.First().Value.Split(":");
                 int columnStart = int.Parse(spanStartAndEnd[0]) - 1;
                 int columnEnd = int.Parse(spanStartAndEnd[1]) - 1;
 
                 if (i > 5)
                 {
                     Cell councilorCell = (Cell)row.ChildElements[0];
-                    councilVotes.Councilors.Add(councilorCell.InnerText);
+                    councilVotes.Councilors.Add(councilorCell.CellValue.Text);
                 }
                 for (int j = 1; j < columnEnd; j++)
                 {
@@ -86,7 +80,8 @@ namespace xlsx_to_json
                     else
                     {
 
-                        DocumentFormat.OpenXml.OpenXmlElement? cell = row.ChildElements.SingleOrDefault(ce => ce.GetAttribute("r", "").Value == currentCell);
+                        OpenXmlElement? cell = row.ChildElements.SingleOrDefault(ce => ((Cell)ce).CellReference == currentCell);
+                        
                         int choiceValue;
                         if (cell == null)
                         {
@@ -101,7 +96,7 @@ namespace xlsx_to_json
                         {
                             CouncilorName = row.ChildElements[0].InnerText,
                             Choice = (Choice)choiceValue,
-                            VoteName = councilVotes.VoteNames[j-1]
+                            VoteName = councilVotes.VoteNames[j - 1]
                         };
                         councilVotes.Votes.Add(councilorVote);
                     }
@@ -109,6 +104,18 @@ namespace xlsx_to_json
             }
 
             return councilVotes;
+        }
+
+        private static void GetSharedStringIndex(SharedStringTablePart? sharedStringTablePart, IDictionary<string, string> sharedStringIndexesForValuesWanted, string columnName)
+        {
+            OpenXmlElement keypadSnCell = sharedStringTablePart.SharedStringTable.ChildElements.SingleOrDefault(ce => ce.InnerText.Equals(columnName));
+            if (keypadSnCell == null)
+            {
+                return;
+            }
+
+            string indexOfKeypadSnString = sharedStringTablePart.SharedStringTable.ChildElements.ToList().IndexOf(keypadSnCell).ToString();
+            sharedStringIndexesForValuesWanted[indexOfKeypadSnString] = columnName;
         }
 
         // joinked from here https://stackoverflow.com/a/297214
