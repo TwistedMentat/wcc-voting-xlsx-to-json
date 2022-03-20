@@ -1,11 +1,6 @@
 ﻿using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Spreadsheet;
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
 
 namespace xlsx_to_json
 {
@@ -43,7 +38,11 @@ namespace xlsx_to_json
 
             bool keepCheckingForVotingSectionStart = true;
 
-            Row startingRow = sheetData.ChildElements.SelectMany(row => row.ChildElements.Where(cell => ((Cell)cell).DataType?.Value == CellValues.SharedString && ((Cell)cell).InnerText == "5")).Single().Parent as Row;
+            Row headerRow = sheetData.ChildElements.SelectMany(row => row.ChildElements.Where(cell => ((Cell)cell).DataType?.Value == CellValues.SharedString && ((Cell)cell).InnerText == "5")).Single().Parent as Row;
+
+            IEnumerable<Cell> allCells = sheetData.ChildElements.SelectMany(r => r.ChildElements).Select(c => (Cell)c);
+
+            councilVotes.VoteNames = GetVoteNames(headerRow, sharedStringTablePart.SharedStringTable, sharedStringIndexesForValuesWanted.Values);
 
             // Need to find where the "Keypad SN" cell is. That will define the row to start.
             for (int i = 0; i < sheetData.ChildElements.Count; i++)
@@ -51,7 +50,7 @@ namespace xlsx_to_json
                 Row row = (Row)sheetData.ChildElements[i];
 
                 string? rowNumberAttribute = row.GetAttribute("r", string.Empty).Value;
-                if (keepCheckingForVotingSectionStart && row.RowIndex != startingRow.RowIndex)
+                if (keepCheckingForVotingSectionStart && row.RowIndex != headerRow.RowIndex)
                 {
                     continue;
                 }
@@ -74,13 +73,11 @@ namespace xlsx_to_json
                     string currentCell = ColumnName(j) + rowNumberAttribute;
                     if (i == 5)
                     {
-                        SharedStringItem sharedStringItem = (SharedStringItem)sharedStringTablePart.SharedStringTable.ChildElements[int.Parse(row.ChildElements[j].InnerText)];
-                        councilVotes.VoteNames.Add(sharedStringItem.InnerText);
                     }
                     else
                     {
 
-                        OpenXmlElement? cell = row.ChildElements.SingleOrDefault(ce => ((Cell)ce).CellReference == currentCell);
+                        Cell cell = (Cell)row.ChildElements.SingleOrDefault(ce => ((Cell)ce).CellReference == currentCell);
                         
                         int choiceValue;
                         if (cell == null)
@@ -104,6 +101,20 @@ namespace xlsx_to_json
             }
 
             return councilVotes;
+        }
+
+        private IList<string> GetVoteNames(Row headerRow, SharedStringTable sharedStringTable, ICollection<string> valuesThatAreNotVotes)
+        {
+            List<string> voteNames = headerRow.ChildElements.Select(cell => GetSharedStringIndex((Cell)cell, sharedStringTable)).ToList();
+
+            voteNames.RemoveAll(vn => valuesThatAreNotVotes.Contains(vn));
+
+            return voteNames.ToList();
+        }
+
+        private string GetSharedStringIndex(Cell cell, SharedStringTable sharedStringTable)
+        {
+            return ((SharedStringItem)sharedStringTable.ChildElements[int.Parse(cell.CellValue.Text)]).Text.Text;
         }
 
         private static void GetSharedStringIndex(SharedStringTablePart? sharedStringTablePart, IDictionary<string, string> sharedStringIndexesForValuesWanted, string columnName)
