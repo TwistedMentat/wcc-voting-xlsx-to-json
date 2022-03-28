@@ -9,10 +9,10 @@ Console.WriteLine("Hello, World!");
 
 SpreadsheetDocument spreadsheetDocument = SpreadsheetDocument.Open(args[0], false);
 
-WccVotingSpreadsheet wccVotingSpreadsheet = new WccVotingSpreadsheet();
+WccVotingSpreadsheet wccVotingSpreadsheet = new WccVotingSpreadsheet(spreadsheetDocument);
 
 
-CouncilVotes councilVotes = wccVotingSpreadsheet.TransformExcel(spreadsheetDocument.WorkbookPart);
+CouncilVotes councilVotes = wccVotingSpreadsheet.TransformExcel();
 
 JsonSerializerOptions options = new JsonSerializerOptions
 {
