@@ -104,9 +104,9 @@ namespace xlsx_to_json
 
                 string voteName = councilVotes.VoteNames.Single(vn => cell.IsInColumn(vn.CellReference.ColumnName)).VoteName;
 
-                CouncilorVote councilorVote = new()
+                CouncillorVote councilorVote = new()
                 {
-                    CouncilorName = councillorName,
+                    CouncillorName = councillorName,
                     Choice = (Choice)ExtractVoteOption(cell),
                     VoteName = voteName
                 };

@@ -1,5 +1,8 @@
-﻿namespace xlsx_to_json
+﻿using System.Diagnostics;
+
+namespace xlsx_to_json
 {
+    [DebuggerDisplay("Column: {ColumnName}, Cell: {CellReference}")]
     public class LocationOfCouncillorDetails
     {
         public string ColumnName { get; set; }

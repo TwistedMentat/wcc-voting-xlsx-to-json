@@ -1,9 +1,9 @@
-﻿using DocumentFormat.OpenXml.Spreadsheet;
+﻿using System.Diagnostics;
 using System.Text.RegularExpressions;
 
 namespace xlsx_to_json
 {
-
+    [DebuggerDisplay("Column: {ColumnName}, Row: {RowNumber}")]
     public class CellReference
     {
         public string ColumnName { get; private set; }
@@ -13,8 +13,6 @@ namespace xlsx_to_json
         public CellReference(string cellReference)
         {
             MatchCollection matchCollection = _splitCellReferenceRegex.Matches(cellReference);
-            Console.WriteLine(matchCollection.Count);
-            // get column
             ColumnName = matchCollection[0].Groups[1].Value;
             RowNumber = int.Parse(matchCollection[0].Groups[2].Value);
         }
