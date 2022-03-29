@@ -4,6 +4,7 @@ using DocumentFormat.OpenXml.Spreadsheet;
 using xlsx_to_json;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using CsvHelper;
 
 Console.WriteLine("Hello, World!");
 
@@ -24,3 +25,10 @@ JsonSerializerOptions options = new JsonSerializerOptions
 string outputJson = JsonSerializer.Serialize(councilVotes, options);
 
 File.WriteAllText($"wcc-votes-{DateTime.UtcNow.Ticks}.json", outputJson);
+
+// Write out a csv of just the votes
+
+using StreamWriter streamWriter = new StreamWriter($"wcc-votes-{DateTime.UtcNow.Ticks}.csv");
+using CsvWriter csvWriter = new CsvWriter(streamWriter, System.Globalization.CultureInfo.InvariantCulture);
+
+csvWriter.WriteRecords<CouncillorVote>(councilVotes.Votes);

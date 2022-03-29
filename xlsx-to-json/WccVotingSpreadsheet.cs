@@ -84,9 +84,6 @@ namespace xlsx_to_json
 
         private void ExtractVotesForCouncillor(CouncilVotes councilVotes, Row row, IList<LocationOfCouncillorDetails> councillorDetailLocations)
         {
-            string[] spanStartAndEnd = row.Spans.Items.First().Value.Split(":");
-            int columnStart = int.Parse(spanStartAndEnd[0]) - 1;
-            int worksheetColumnIndexEnd = int.Parse(spanStartAndEnd[1]) - 1;
             string councillorName = GetCouncillorName(row, councillorDetailLocations);
 
             foreach (Cell cell in row.ChildElements.Cast<Cell>())
@@ -120,15 +117,14 @@ namespace xlsx_to_json
             if (councillorDetailLocations.Any(cdl => cdl.ColumnName == FirstNameColumnName))
             {
                 // assume first and last columns exist
-                LocationOfCouncillorDetails firstName = councillorDetailLocations.Single(cdl => cdl.ColumnName == KeypadSnColumnName);
-                CellReference firstNameCell = firstName.CellReference;
-                LocationOfCouncillorDetails lastName = councillorDetailLocations.Single(cdl => cdl.ColumnName == KeypadSnColumnName);
-                CellReference lastNameCell = lastName.CellReference;
+                CellReference firstNameCellReference = councillorDetailLocations.Single(cdl => cdl.ColumnName == FirstNameColumnName).CellReference;
+                CellReference lastNameCellReference = councillorDetailLocations.Single(cdl => cdl.ColumnName == LastNameColumnName).CellReference;
 
-                string firstNameValue = row.ChildElements.Cast<Cell>().Single(c => c.CellReference.Value.StartsWith(firstNameCell.ColumnName)).CellValue.Text;
-                string lastNameValue = row.ChildElements.Cast<Cell>().Single(c => c.CellReference.Value.StartsWith(lastNameCell.ColumnName)).CellValue.Text;
+                // Need to pull these from shared strings
+                Cell firstNameValue = row.ChildElements.Cast<Cell>().Single(c => c.IsInColumn(firstNameCellReference.ColumnName));
+                Cell lastNameValue = row.ChildElements.Cast<Cell>().Single(c => c.IsInColumn(lastNameCellReference.ColumnName));
 
-                return string.Concat(firstNameValue, " ", lastNameValue);
+                return string.Concat(firstNameValue.GetCellValue(_sharedStringTable), " ", lastNameValue.GetCellValue(_sharedStringTable));
             }
             else
             {
@@ -136,23 +132,24 @@ namespace xlsx_to_json
                 LocationOfCouncillorDetails keypadSn = councillorDetailLocations.Single(cdl => cdl.ColumnName == KeypadSnColumnName);
                 return row.ChildElements.Cast<Cell>().Single(c => c.IsInColumn(keypadSn.CellReference.ColumnName)).CellValue.Text;
             }
-
-            throw new NotImplementedException();
         }
 
-        private static int ExtractVoteOption(Cell cellsInRow)
+        private int ExtractVoteOption(Cell cellWithVoteChoice)
         {
-            int choiceValue;
-            if (cellsInRow == null)
+            if (cellWithVoteChoice == null)
             {
-                choiceValue = 0;
-            }
-            else
-            {
-                choiceValue = int.Parse(cellsInRow.InnerText);
+                return 0;
             }
 
-            return choiceValue;
+            string voteChoice = cellWithVoteChoice.GetCellValue(_sharedStringTable);
+
+            bool isStringValue = Enum.TryParse(voteChoice, out Choice option);
+            if (isStringValue)
+            {
+                return (int)option;
+            }
+
+            return int.Parse(cellWithVoteChoice.InnerText);
         }
 
         private IList<(string VoteName, CellReference CellReference)> GetVoteNames(Row headerRow, SharedStringTable sharedStringTable, IEnumerable<LocationOfCouncillorDetails> locationsOfCouncillorDetails)

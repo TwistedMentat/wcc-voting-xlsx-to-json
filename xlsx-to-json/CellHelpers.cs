@@ -31,5 +31,14 @@ namespace xlsx_to_json
             return ((Row)thisCell.Parent).RowIndex == ((Row)cellToCompare.Parent).RowIndex;
         }
 
+        public static string GetCellValue(this Cell cell, SharedStringTable sharedStringTable)
+        {
+            if (cell.DataType != null && cell.DataType == CellValues.SharedString)
+            {
+                return ((SharedStringItem)sharedStringTable.ToList()[int.Parse(cell.CellValue.Text)]).Text.Text;
+            }
+            return cell.CellValue.Text;
+        }
+
     }
 }
