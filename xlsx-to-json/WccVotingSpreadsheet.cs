@@ -1,103 +1,147 @@
 ﻿using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Spreadsheet;
+using System.Text.RegularExpressions;
 
 namespace xlsx_to_json
 {
     public class WccVotingSpreadsheet
     {
-        private SharedStringTable sharedStringTable;
-        private SheetData sheetData;
-        private IEnumerable<Cell> allCells;
+        private const string KeypadSnColumnName = "Keypad SN";
+        private const string FirstNameColumnName = "First Name";
+        private const string LastNameColumnName = "Last Name";
+        private readonly SharedStringTable _sharedStringTable;
+        private readonly SheetData _sheetData;
+        private readonly IEnumerable<Cell> _allCellsInSheet;
+        private readonly Regex _splitCellReferenceRegex = new("^([a-zA-Z]+)(\\d+)$");
 
         public WccVotingSpreadsheet(SpreadsheetDocument spreadsheetDocument)
         {
-            sharedStringTable = spreadsheetDocument.WorkbookPart.SharedStringTablePart.SharedStringTable;
+            _sharedStringTable = spreadsheetDocument.WorkbookPart.SharedStringTablePart.SharedStringTable;
             IEnumerable<WorksheetPart> worksheetParts = spreadsheetDocument.WorkbookPart.WorksheetParts;
             WorksheetPart worksheetPart = worksheetParts.First();
-            sheetData = (SheetData)worksheetPart.RootElement.ChildElements.Single(w => w is SheetData);
-            allCells = sheetData.ChildElements.SelectMany(r => r.ChildElements).Cast<Cell>();
+            _sheetData = (SheetData)worksheetPart.RootElement.ChildElements.First(w => w is SheetData); // If we have multiple sheets it will only look at the first in the file. Which may not match in Excel.
+            _allCellsInSheet = _sheetData.ChildElements.SelectMany(r => r.ChildElements).Cast<Cell>();
         }
 
         public CouncilVotes TransformExcel()
         {
             // Why not just make an in memory table with all the properties you want? Then just use objects and LINQ to chop it up as needed :/
-            
-            List<CouncillorDetails?> councillorDetails = new()
-            {
-                GetSharedStringIndexOfHeaderName("Keypad SN", sharedStringTable),
-                GetSharedStringIndexOfHeaderName("First Name", sharedStringTable),
-                GetSharedStringIndexOfHeaderName("Last Name", sharedStringTable)
-            };
-            councillorDetails.RemoveAll(cd => cd == null);
 
-            foreach (Cell? cell in sheetData.ChildElements.SelectMany(row => row.ChildElements.Where(cell => councillorDetails.Any(s => s.SharedStringIndex == cell.InnerText))))
+            List<LocationOfCouncillorDetails> locationsOfCouncillorDetails = FindLocationsOfCouncillorDetails();
+
+            Row headerRow = (Row)_allCellsInSheet.First(cell => IsCellInHeaderRow(cell, locationsOfCouncillorDetails)).Parent;
+
+            CouncilVotes councilVotes = new()
+            {
+                VoteNames = GetVoteNames(headerRow, _sharedStringTable, locationsOfCouncillorDetails)
+            };
+
+            // Improvement option: Get every row starting from the header row until there's a blank row
+            IList<Row> voteTableRows = _sheetData.ChildElements.Cast<Row>().Where(row => row.RowIndex > headerRow.RowIndex).OrderBy(vtr => vtr.RowIndex).ToList();
+
+            foreach (Row voteTableRow in voteTableRows)
+            {
+                Cell councillorCell = (Cell)voteTableRow.ChildElements[0];
+                councilVotes.Councillors.Add(councillorCell.CellValue.Text);
+
+                ExtractVotesForCouncillor(councilVotes, voteTableRow, locationsOfCouncillorDetails);
+            }
+
+
+            return councilVotes;
+        }
+
+        private static bool IsCellInHeaderRow(Cell cell, List<LocationOfCouncillorDetails> locationsOfCouncillorDetails)
+        {
+            return cell.CellValue != null
+                                && cell.DataType == CellValues.SharedString
+                                && locationsOfCouncillorDetails.Any(cd => cd.SharedStringIndex == cell.CellValue.Text);
+        }
+
+        private List<LocationOfCouncillorDetails> FindLocationsOfCouncillorDetails()
+        {
+            List<LocationOfCouncillorDetails> councillorDetailLocations = new()
+            {
+                GetSharedStringIndexOfHeaderName(KeypadSnColumnName, _sharedStringTable),
+                GetSharedStringIndexOfHeaderName(FirstNameColumnName, _sharedStringTable),
+                GetSharedStringIndexOfHeaderName(LastNameColumnName, _sharedStringTable)
+            };
+            councillorDetailLocations.RemoveAll(cd => cd == null);
+
+            foreach (Cell cell in _sheetData.ChildElements.SelectMany(row => row.ChildElements.Where(cell => councillorDetailLocations.Any(s => s.SharedStringIndex == cell.InnerText))))
             {
                 if (cell == null)
                 {
                     continue;
                 }
 
-                councillorDetails.Single(cd => cd.SharedStringIndex == cell.InnerText).CellReference = cell.CellReference.Value;
+                councillorDetailLocations.Single(cd => cd.SharedStringIndex == cell.InnerText).CellReference = new CellReference(cell.CellReference);
             }
 
-            bool keepCheckingForVotingSectionStart = true;
+            return councillorDetailLocations;
+        }
 
-            Row headerRow = allCells.Single(cell => cell.DataType?.Value == CellValues.SharedString && cell.InnerText == "5").Parent as Row;
+        private void ExtractVotesForCouncillor(CouncilVotes councilVotes, Row row, IList<LocationOfCouncillorDetails> councillorDetailLocations)
+        {
+            string[] spanStartAndEnd = row.Spans.Items.First().Value.Split(":");
+            int columnStart = int.Parse(spanStartAndEnd[0]) - 1;
+            int worksheetColumnIndexEnd = int.Parse(spanStartAndEnd[1]) - 1;
+            string councillorName = GetCouncillorName(row, councillorDetailLocations);
 
-            CouncilVotes councilVotes = new()
+            foreach (Cell cell in row.ChildElements.Cast<Cell>())
             {
-                VoteNames = GetVoteNames(headerRow, sharedStringTable, councillorDetails.Select(cd => cd.SharedStringIndex).ToList())
-            };
+                // split reference
+                MatchCollection matchCollection = _splitCellReferenceRegex.Matches(cell.CellReference);
+                string columnName = matchCollection[0].Groups[1].Value;
+                // put excel column of header value in votes collection
 
-            // Need to find where the "Keypad SN" cell is. That will define the row to start.
-
-            // Get rows with vote information in them. This will be every contigous row starting from the header row which we already know
-            IList<Row> voteTableRows= sheetData.ChildElements.Cast<Row>().Where(row => row.RowIndex >= headerRow.RowIndex).ToList();
-
-            for (int i = 0; i < sheetData.ChildElements.Count; i++)
-            {
-                Row row = (Row)sheetData.ChildElements[i];
-
-                if (keepCheckingForVotingSectionStart && row.RowIndex != headerRow.RowIndex)
+                // Skip any of the columns that are the councillor names
+                if (councillorDetailLocations.Any(cdl => cell.IsInColumn(cdl.CellReference.ColumnName)))
                 {
                     continue;
                 }
-                else
-                {
-                    keepCheckingForVotingSectionStart = false;
-                }
 
-                string[] spanStartAndEnd = row.Spans.Items.First().Value.Split(":");
-                int columnStart = int.Parse(spanStartAndEnd[0]) - 1;
-                int worksheetColumnIndexEnd = int.Parse(spanStartAndEnd[1]) - 1;
+                string voteName = councilVotes.VoteNames.Single(vn => cell.IsInColumn(vn.CellReference.ColumnName)).VoteName;
 
-                if (i > headerRow.RowIndex)
+                CouncilorVote councilorVote = new()
                 {
-                    Cell councilorCell = (Cell)row.ChildElements[0];
-                    councilVotes.Councilors.Add(councilorCell.CellValue.Text);
-                }
+                    CouncilorName = councillorName,
+                    Choice = (Choice)ExtractVoteOption(cell),
+                    VoteName = voteName
+                };
+                councilVotes.Votes.Add(councilorVote);
 
-                for (int worksheetColumnIndex = 1; worksheetColumnIndex < worksheetColumnIndexEnd; worksheetColumnIndex++)
-                {
-                    ExtractVotesForCouncillor(councilVotes, row, worksheetColumnIndex, headerRow);
-                }
             }
-
-            return councilVotes;
         }
 
-        private void ExtractVotesForCouncillor(CouncilVotes councilVotes, Row row, int worksheetColumnIndex, Row headerRow)
+        private string GetCouncillorName(Row row, IList<LocationOfCouncillorDetails> councillorDetailLocations)
         {
-            if (row == headerRow)
+            if (councillorDetailLocations.Any(cdl => cdl.ColumnName == FirstNameColumnName))
             {
-                return;
+                // assume first and last columns exist
+                LocationOfCouncillorDetails firstName = councillorDetailLocations.Single(cdl => cdl.ColumnName == KeypadSnColumnName);
+                CellReference firstNameCell = firstName.CellReference;
+                LocationOfCouncillorDetails lastName = councillorDetailLocations.Single(cdl => cdl.ColumnName == KeypadSnColumnName);
+                CellReference lastNameCell = lastName.CellReference;
+
+                string firstNameValue = row.ChildElements.Cast<Cell>().Single(c => c.CellReference.Value.StartsWith(firstNameCell.ColumnName)).CellValue.Text;
+                string lastNameValue = row.ChildElements.Cast<Cell>().Single(c => c.CellReference.Value.StartsWith(lastNameCell.ColumnName)).CellValue.Text;
+
+                return string.Concat(firstNameValue, " ", lastNameValue);
+            }
+            else
+            {
+                // use keypad sn
+                LocationOfCouncillorDetails keypadSn = councillorDetailLocations.Single(cdl => cdl.ColumnName == KeypadSnColumnName);
+                return row.ChildElements.Cast<Cell>().Single(c => c.IsInColumn(keypadSn.CellReference.ColumnName)).CellValue.Text;
             }
 
-            string currentCell = GetWorksheetColumnReference(worksheetColumnIndex) + row.RowIndex;
+            throw new NotImplementedException();
+        }
 
-            Cell cellsInRow = row.ChildElements.Cast<Cell>().SingleOrDefault(ce => ce.CellReference == currentCell);
-
+        private static int ExtractVoteOption(Cell cellsInRow)
+        {
             int choiceValue;
             if (cellsInRow == null)
             {
@@ -108,30 +152,24 @@ namespace xlsx_to_json
                 choiceValue = int.Parse(cellsInRow.InnerText);
             }
 
-            CouncilorVote councilorVote = new()
-            {
-                CouncilorName = row.ChildElements[0].InnerText,
-                Choice = (Choice)choiceValue,
-                VoteName = councilVotes.VoteNames[worksheetColumnIndex - 1]
-            };
-            councilVotes.Votes.Add(councilorVote);
+            return choiceValue;
         }
 
-        private IList<string> GetVoteNames(Row headerRow, SharedStringTable sharedStringTable, ICollection<string> valuesThatAreNotVotes)
+        private IList<(string VoteName, CellReference CellReference)> GetVoteNames(Row headerRow, SharedStringTable sharedStringTable, IEnumerable<LocationOfCouncillorDetails> locationsOfCouncillorDetails)
         {
-            List<string> voteNames = headerRow.ChildElements.Cast<Cell>().Select(cell => GetSharedStringIndexOfVoteName(cell, sharedStringTable)).ToList();
+            List<(string VoteName, CellReference CellReference)> voteNames = headerRow.ChildElements.Cast<Cell>().Select(cell => (GetSharedStringValueOfVoteName(cell, sharedStringTable), new CellReference(cell.CellReference))).ToList();
 
-            voteNames.RemoveAll(vn => valuesThatAreNotVotes.Contains(vn));
+            voteNames.RemoveAll(vn => locationsOfCouncillorDetails.Any(cd => cd.ColumnName == vn.VoteName));
 
             return voteNames.ToList();
         }
 
-        private string GetSharedStringIndexOfVoteName(Cell cell, SharedStringTable sharedStringTable)
+        private string GetSharedStringValueOfVoteName(Cell cell, SharedStringTable sharedStringTable)
         {
             return sharedStringTable.ChildElements.Cast<SharedStringItem>().ToList()[int.Parse(cell.CellValue.Text)].Text.Text;
         }
 
-        private CouncillorDetails GetSharedStringIndexOfHeaderName(string columnName, SharedStringTable sharedStringTable)
+        private LocationOfCouncillorDetails GetSharedStringIndexOfHeaderName(string columnName, SharedStringTable sharedStringTable)
         {
             OpenXmlElement keypadSnCell = sharedStringTable.ChildElements.SingleOrDefault(ce => ce.InnerText.Equals(columnName));
             if (keypadSnCell == null)
@@ -140,7 +178,7 @@ namespace xlsx_to_json
             }
 
             string sharedStringIndex = sharedStringTable.ChildElements.ToList().IndexOf(keypadSnCell).ToString();
-            return new CouncillorDetails { Label = columnName, SharedStringIndex = sharedStringIndex };
+            return new LocationOfCouncillorDetails { ColumnName = columnName, SharedStringIndex = sharedStringIndex };
         }
 
         // joinked from here https://stackoverflow.com/a/297214
@@ -155,5 +193,6 @@ namespace xlsx_to_json
                 return chars[index % 26].ToString();
         }
         private char[] chars = new char[] { 'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z' };
+
     }
 }
